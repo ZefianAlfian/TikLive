@@ -3,7 +3,6 @@ package engine
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"tiklive/internal/expr"
 )
@@ -84,14 +83,9 @@ func TestTimeoutAdvancesRound(t *testing.T) {
 	e.SetConfig(cfg)
 	e.Start()
 
-	// Let the 1-second timer fire and advance.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		q := e.Question()
-		if q != nil && q.ID > 1 {
-			break
-		}
-		time.Sleep(200 * time.Millisecond)
+	// Drive the countdown manually via Tick() — the hub calls this each second.
+	for i := 0; i < 2; i++ {
+		e.Tick()
 	}
 	if e.Question() == nil || e.Question().ID <= 1 {
 		t.Fatalf("question did not advance after timeout: round=%d", e.Round())

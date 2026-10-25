@@ -109,6 +109,9 @@ type Callbacks struct {
 }
 
 // Engine is the authoritative game state for one session.
+// The Engine is NOT goroutine-safe and MUST be driven from one goroutine
+// (the hub's event bus consumer). Timing is driven by Hub.Tick(), never by
+// an internal goroutine, so there is no concurrent access.
 type Engine struct {
 	cfg  Config
 	cb   Callbacks
@@ -118,8 +121,6 @@ type Engine struct {
 	question      *Question
 	ansAnswer     int
 	timeLeft      int
-	timerActive   bool
-	stopTimerCh   chan struct{}
 	questionStart time.Time
 
 	players map[string]*Player
@@ -151,12 +152,12 @@ func (e *Engine) Question() *Question { return e.question }
 
 // Start begins a fresh session.
 func (e *Engine) Start() {
-	e.stopTimer()
 	e.players = make(map[string]*Player)
 	e.gifts = 0
 	e.round = 0
 	e.nextQID = 0
 	e.phase = PhaseRunning
+	e.timeLeft = e.cfg.TimerSec
 	e.nextQuestion()
 }
 
@@ -166,7 +167,6 @@ func (e *Engine) Pause() {
 		return
 	}
 	e.phase = PhasePaused
-	e.stopTimer()
 }
 
 // Resume continues a paused session.
@@ -175,7 +175,20 @@ func (e *Engine) Resume() {
 		return
 	}
 	e.phase = PhaseRunning
-	e.startTimer()
+}
+
+// Tick advances the server countdown by one second. Called once per second
+// by the hub bus consumer. On timeout it emits timeout and advances the round.
+func (e *Engine) Tick() {
+	if e.phase != PhaseRunning {
+		return
+	}
+	e.timeLeft--
+	e.emit(Event{"tick", e.timeLeft})
+	if e.timeLeft <= 0 {
+		e.emit(Event{"timeout", e.question})
+		e.nextQuestion()
+	}
 }
 
 // End stops the session and announces the winner.
@@ -183,7 +196,6 @@ func (e *Engine) End() {
 	if e.phase == PhaseIdle || e.phase == PhaseEnded {
 		return
 	}
-	e.stopTimer()
 	e.phase = PhaseEnded
 	if e.cb.OnWinner != nil {
 		rows := e.Leaderboard()
@@ -217,8 +229,7 @@ func (e *Engine) Leaderboard() []LeaderRow {
 	return rows
 }
 
-// StopTimer is exported for the hub to cancel timers on shutdown.
-func (e *Engine) StopTimer() { e.stopTimer() }
+func (e *Engine) QID() int64 { return e.nextQID }
 
 // ---------- event ingestion ----------
 
@@ -355,45 +366,6 @@ func (e *Engine) nextQuestion() {
 	e.questionStart = time.Now()
 	e.timeLeft = e.cfg.TimerSec
 	e.emit(Event{"question", e.question})
-	e.startTimer()
-}
-
-// startTimer begins the server-side countdown ticker.
-func (e *Engine) startTimer() {
-	if e.timerActive {
-		return
-	}
-	e.timerActive = true
-	e.stopTimerCh = make(chan struct{})
-	go e.tickLoop()
-}
-
-// tickLoop emits one tick per second until timeLeft hits 0.
-func (e *Engine) tickLoop() {
-	t := time.NewTicker(1 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-e.stopTimerCh:
-			return
-		case <-t.C:
-			e.timeLeft--
-			e.emit(Event{"tick", e.timeLeft})
-			if e.timeLeft <= 0 {
-				e.emit(Event{"timeout", e.question})
-				e.nextQuestion()
-				return
-			}
-		}
-	}
-}
-
-// stopTimer cancels any running tickLoop.
-func (e *Engine) stopTimer() {
-	if e.timerActive {
-		close(e.stopTimerCh)
-		e.timerActive = false
-	}
 }
 
 // emit forwards an event to the callback (hub broadcast).

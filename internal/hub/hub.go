@@ -143,13 +143,18 @@ func (h *Hub) StateSnapshot() map[string]interface{} {
 // Bus returns the ingestion channel for provider events.
 func (h *Hub) Bus() chan<- provider.RawEvent { return h.bus }
 
-// Run consumes the event bus and dispatches to the engine until stop.
+// Run consumes the event bus and drives the engine's 1-second countdown from
+// the SAME goroutine, so the engine is never accessed concurrently.
 func (h *Hub) Run(stop <-chan struct{}) {
 	defer h.StopProvider() // clean teardown when the bus consumer exits
+	tick := time.NewTicker(1 * time.Second)
+	defer tick.Stop()
 	for {
 		select {
 		case <-stop:
 			return
+		case <-tick.C:
+			h.eng.Tick()
 		case ev, ok := <-h.bus:
 			if !ok {
 				return
