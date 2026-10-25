@@ -1,0 +1,20 @@
+# Go
+bin/
+*.exe
+
+# Node / frontend
+web/node_modules/
+web/dist/
+
+# Runtime data (config dibuat otomatis; jangan commit token)
+data/
+*.log
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Dokumen yang regenerable
+docs/overlay_*.png

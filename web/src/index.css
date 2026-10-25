@@ -1,0 +1,100 @@
+/* Tiklive design tokens — comic/playful but readable.
+   Inspired by the reference look: red, cream, black, mint green, yellow;
+   thick outlines, rounded corners, dynamic animations. */
+:root {
+  --c-red: #e63946;
+  --c-red-dark: #c1121f;
+  --c-cream: #fff8ed;
+  --c-black: #1a1a1a;
+  --c-mint: #4ecdc4;
+  --c-mint-dark: #2fa89f;
+  --c-yellow: #ffd166;
+  --c-yellow-dark: #f5a623;
+  --c-white: #ffffff;
+
+  --ink: #222;
+  --ink-muted: #555;
+
+  --bw: 4px; /* default border width */
+  --r-xl: 30px;
+  --r-lg: 22px;
+  --r-md: 16px;
+  --r-sm: 10px;
+
+  --font-display: 'Fredoka One', 'Baloo 2', 'Comic Sans MS', cursive;
+  --font-body: 'Baloo 2', 'Fredoka', 'Segoe UI', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: transparent;
+}
+
+/* thick comic outline */
+.comic-border {
+  border: var(--bw) solid var(--ink);
+  border-radius: var(--r-lg);
+  box-shadow: 6px 6px 0 var(--c-red);
+}
+.comic-border-dark { box-shadow: 6px 6px 0 var(--ink); }
+
+/* dashed sticker outline */
+.sticker {
+  border: 3px dashed var(--c-red);
+  border-radius: var(--r-md);
+  padding: 6px 12px;
+}
+
+/* solid vivid blocks */
+.bg-red { background: var(--c-red); color: var(--c-white); }
+.bg-cream { background: var(--c-cream); color: var(--ink); }
+.bg-mint { background: var(--c-mint); color: var(--c-black); }
+.bg-yellow { background: var(--c-yellow); color: var(--ink); }
+.bg-black { background: var(--c-black); color: var(--c-white); }
+
+/* ---------- animation keyframes ---------- */
+@keyframes pop-in {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes float-up {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-40px); opacity: 0; }
+}
+@keyframes pulse-glow {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+@keyframes shake {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-6deg); }
+  75% { transform: rotate(6deg); }
+}
+
+.anim-pop { animation: pop 0.4s cubic-bezier(.2,.9,.3,1.4) both; }
+.anim-pop-big { animation: pop 0.5s cubic-bezier(.2,.9,.3,1.5) both; }
+.anim-float { animation: float-up 1.1s ease-out both; }
+.anim-pulse { animation: pulse-glow 1.2s ease-in-out infinite; }
+.anim-shake { animation: shake 0.4s ease-in-out both; }
+
+/* text popups */
+.fx { position: absolute; font-weight: 800; }
+
+.fx-good {
+  color: #0f766e;
+  text-shadow: 0 0 10px var(--c-mint);
+}
+.fx-bad {
+  color: #b91c1c;
+  text-shadow: 0 0 10px var(--c-red);
+}
+
+/* utility */
+.mono { font-variant-numeric: tabular-nums; }
+.hidden { display: none !important; }
