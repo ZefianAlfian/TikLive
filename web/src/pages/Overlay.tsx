@@ -89,11 +89,23 @@ export default function Overlay() {
   const top = leader.slice(0, 3)
   const rest = leader.slice(3, MAX_LB)
 
+  // Auto-scale: fit the fixed 1080x1920 canvas into whatever the OBS Browser
+  // Source viewport is (any ratio), preserving proportions and centering.
+  // This avoids the "overlay too big / broken in OBS" problem.
+  const DESIGN_W = 1080
+  const DESIGN_H = 1920
   return (
     <div style={{
-      position: 'relative', width: '1080px', height: '1920px', overflow: 'hidden',
+      position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden',
       background: 'transparent',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
+      <div style={{
+        position: 'relative', width: DESIGN_W, height: DESIGN_H,
+        transform: `scale(min(100vw / ${DESIGN_W}, 100vh / ${DESIGN_H}))`,
+        transformOrigin: 'center center',
+        flexShrink: 0,
+      }}>
       <div style={{
         margin: '40px', height: '100%', borderRadius: 40, background: 'var(--c-cream)',
         border: '8px solid var(--ink)', boxShadow: '0 18px 0 rgba(26,26,26,.9)',
@@ -116,6 +128,7 @@ export default function Overlay() {
 
         {/* weak footer */}
         <Footer />
+      </div>
       </div>
     </div>
   )
