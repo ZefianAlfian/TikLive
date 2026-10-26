@@ -287,10 +287,13 @@ func (h *Hub) handleEvent(ev provider.RawEvent) {
 	msg := WSMessage{Type: "event", Data: ev}
 	h.logEvent(msg)
 	h.broadcast(msg)
-	if ev.Kind == "viewers" || ev.Kind == "connect" || ev.Kind == "disconnect" {
-		// NOTE: we are ON the bus goroutine here — must NOT call
-		// StateSnapshot() (which Submits & waits → self-deadlock). Use the
-		// direct on-bus variant.
+	// NOTE: we are ON the bus goroutine. Do NOT call StateSnapshot() here
+	// (it Submits and waits → self-deadlock). High-frequency events
+	// (viewers/join/like) do NOT trigger a full-state broadcast — the
+	// periodic 5s stateTick already resyncs every client; broadcasting the
+	// whole snapshot per viewer event used to flood slow clients (the
+	// "overlay feels stuck" symptom on busy LIVE streams).
+	if ev.Kind == "connect" || ev.Kind == "disconnect" {
 		h.broadcast(WSMessage{Type: "state", Data: h.stateSnapshotOnBus()})
 	}
 }

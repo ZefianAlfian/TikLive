@@ -45,15 +45,23 @@ export function connectWS(
   }
 
   // Primary watchdog (works while the page is visible/rendered).
-  const watchdog = setInterval(killIfStale, 3000)
+  const watchdog = setInterval(killIfStale, 2000)
 
   // OBS wake-up hooks: these fire reliably when the Browser Source becomes
-  // active again, even after long suspends, and catch the case where the
-  // interval watchdog was frozen the whole time.
+  // active again, even after long suspends. On wake we reconnect IMMEDIATELY
+  // (skip the backoff — OBS is now visible so the network is alive) to make
+  // the recovery near-instant instead of waiting out a long retry timer.
   const wake = () => {
     if (closed) return
-    // Give the socket a beat to deliver buffered frames; then check.
-    setTimeout(killIfStale, 1500)
+    if (!ws || ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
+      // If the socket looks alive, first give it a beat to deliver any
+      // buffered frames; if still stale, kill it for a fresh reconnect.
+      setTimeout(killIfStale, 800)
+      return
+    }
+    // Socket is dead or closing: reconnect right now, backoff reset.
+    retry = 0
+    schedule()
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') wake()
