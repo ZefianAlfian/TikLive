@@ -8,13 +8,18 @@ export interface LiveConn {
 // The server broadcasts a full state snapshot every 5s. If we hear nothing
 // for WATCHDOG_MS the link is dead (OBS suspend/resume, half-open TCP) and
 // we force a reconnect instead of sitting on a zombie socket.
-const WATCHDOG_MS = 10000
+const WATCHDOG_MS = 8000
 
 /**
  * connectWS opens a WebSocket to /ws with the given role and keeps it alive
  * with exponential backoff (500ms -> 5s cap). Every message is dispatched to
  * onMessage; connection state changes fire onStatus. The server pushes a
  * state snapshot immediately on connect, so every reconnect self-heals.
+ *
+ * OBS-specific recovery: when a Browser Source is backgrounded OBS freezes
+ * its timers, so a setInterval watchdog never fires while hidden. We also
+ * hook visibilitychange/pageshow (fired the moment the source becomes
+ * visible again) and force a reconnect there if the link looks stale.
  */
 export function connectWS(
   role: 'overlay' | 'dashboard',
@@ -28,12 +33,33 @@ export function connectWS(
 
   const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?role=${role}`
 
-  const watchdog = setInterval(() => {
-    if (closed) return
-    if (Date.now() - lastMsg > WATCHDOG_MS && ws) {
+  function stale() {
+    return Date.now() - lastMsg > WATCHDOG_MS
+  }
+
+  function killIfStale() {
+    if (closed || !ws) return
+    if (stale()) {
       try { ws.close() } catch { /* noop */ } // triggers onclose -> schedule()
     }
-  }, 3000)
+  }
+
+  // Primary watchdog (works while the page is visible/rendered).
+  const watchdog = setInterval(killIfStale, 3000)
+
+  // OBS wake-up hooks: these fire reliably when the Browser Source becomes
+  // active again, even after long suspends, and catch the case where the
+  // interval watchdog was frozen the whole time.
+  const wake = () => {
+    if (closed) return
+    // Give the socket a beat to deliver buffered frames; then check.
+    setTimeout(killIfStale, 1500)
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') wake()
+  })
+  window.addEventListener('pageshow', wake)
+  window.addEventListener('focus', wake)
 
   function open() {
     if (closed) return
