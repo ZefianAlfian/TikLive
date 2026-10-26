@@ -106,13 +106,13 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 	eng := s.hub.Engine()
 	switch req.Action {
 	case "start":
-		eng.Start()
+		s.hub.Submit(func() { eng.Start() })
 	case "pause":
-		eng.Pause()
+		s.hub.Submit(func() { eng.Pause() })
 	case "resume":
-		eng.Resume()
+		s.hub.Submit(func() { eng.Resume() })
 	case "end":
-		eng.End()
+		s.hub.Submit(func() { eng.End() })
 	default:
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
@@ -122,11 +122,14 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfig GET returns current engine config; POST applies a new one.
+// Both access the engine only through the hub bus goroutine (race-free).
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	eng := s.hub.Engine()
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, eng.Config())
+		var cfg engine.Config
+		s.hub.Submit(func() { cfg = eng.Config() })
+		writeJSON(w, cfg)
 	case http.MethodPost:
 		var cfg engine.Config
 		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -142,7 +145,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		if cfg.RoundTotal <= 0 {
 			cfg.RoundTotal = 10
 		}
-		eng.SetConfig(cfg)
+		s.hub.Submit(func() { eng.SetConfig(cfg) })
 		s.hub.BroadcastState()
 		writeJSON(w, map[string]string{"ok": "config applied"})
 	default:

@@ -33,6 +33,12 @@ type Hub struct {
 	eng *engine.Engine
 	bus chan provider.RawEvent // bounded event bus
 
+	// cmdCh serializes all engine commands (start/pause/resume/end/config)
+	// onto the bus consumer goroutine. The engine is NEVER touched from
+	// other goroutines — this prevents data races that previously stalled
+	// the round timer.
+	cmdCh chan func()
+
 	mu      sync.Mutex
 	clients map[*Client]bool
 
@@ -58,6 +64,7 @@ type Hub struct {
 func New(maxQueue int) *Hub {
 	h := &Hub{
 		bus:     make(chan provider.RawEvent, maxQueue),
+		cmdCh:   make(chan func(), 64),
 		clients: make(map[*Client]bool),
 		maxLog:  500,
 	}
@@ -96,9 +103,19 @@ func (h *Hub) RemoveClient(c *Client) {
 
 // BroadcastState pushes the current snapshot + a fresh leaderboard to all.
 func (h *Hub) BroadcastState() {
-	st := h.StateSnapshot()
-	h.broadcast(WSMessage{Type: "state", Data: st})
-	h.broadcast(WSMessage{Type: "leaderboard", Data: h.eng.Leaderboard()})
+	// Read the engine state on the bus goroutine to stay race-free.
+	var st map[string]interface{}
+	var lb []engine.LeaderRow
+	h.Submit(func() {
+		st = h.stateSnapshotOnBus()
+		lb = h.eng.Leaderboard()
+	})
+	if st != nil {
+		h.broadcast(WSMessage{Type: "state", Data: st})
+	}
+	if lb != nil {
+		h.broadcast(WSMessage{Type: "leaderboard", Data: lb})
+	}
 }
 
 // BroadcastStatus pushes provider/connection status.
@@ -118,14 +135,22 @@ func (h *Hub) BroadcastStatus() {
 }
 
 // StateSnapshot builds the current authoritative state for clients.
+// Safe to call from any goroutine: engine reads are funneled through Submit.
 func (h *Hub) StateSnapshot() map[string]interface{} {
+	var st map[string]interface{}
+	h.Submit(func() { st = h.stateSnapshotOnBus() })
+	return st
+}
+
+// stateSnapshotOnBus reads the engine state; MUST be called on the bus
+// consumer goroutine (inside Submit).
+func (h *Hub) stateSnapshotOnBus() map[string]interface{} {
 	h.stateMu.Lock()
 	defer h.stateMu.Unlock()
-	q := h.eng.Question()
 	return map[string]interface{}{
 		"game":       h.eng.Phase(),
 		"mode":       "math",
-		"question":   q,
+		"question":   h.eng.Question(),
 		"time_left":  h.engTimeLeft(),
 		"round":      h.eng.Round(),
 		"round_max":  h.eng.RoundMax(),
@@ -144,7 +169,8 @@ func (h *Hub) StateSnapshot() map[string]interface{} {
 func (h *Hub) Bus() chan<- provider.RawEvent { return h.bus }
 
 // Run consumes the event bus and drives the engine's 1-second countdown from
-// the SAME goroutine, so the engine is never accessed concurrently.
+// the SAME goroutine, so the engine is never accessed concurrently. All
+// engine commands (start/pause/end/config) are funneled through cmdCh here.
 func (h *Hub) Run(stop <-chan struct{}) {
 	defer h.StopProvider() // clean teardown when the bus consumer exits
 	tick := time.NewTicker(1 * time.Second)
@@ -160,7 +186,27 @@ func (h *Hub) Run(stop <-chan struct{}) {
 				return
 			}
 			h.handleEvent(ev)
+		case cmd := <-h.cmdCh:
+			cmd()
 		}
+	}
+}
+
+// Submit runs fn on the bus consumer goroutine (serialized with all other
+// engine access) and waits for it to finish. Returns false if the hub is
+// shutting down.
+func (h *Hub) Submit(fn func()) bool {
+	done := make(chan struct{})
+	select {
+	case h.cmdCh <- func() { fn(); close(done) }:
+		select {
+		case <-done:
+			return true
+		case <-time.After(3 * time.Second):
+			return false // bus goroutine wedged; don't hang the HTTP handler
+		}
+	default:
+		return false // command queue full
 	}
 }
 
