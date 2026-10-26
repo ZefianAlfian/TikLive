@@ -44,24 +44,25 @@ export function connectWS(
     }
   }
 
-  // Primary watchdog (works while the page is visible/rendered).
-  const watchdog = setInterval(killIfStale, 2000)
+  // Watchdog REMOVED: Chrome throttles setInterval in background tabs to
+  // ~1/min, which made the watchdog kill healthy idle connections on a
+  // ~45s cycle (observed in production logs). Dead links are instead
+  // handled by: (a) server-side ping/pong + read deadline, (b) the server's
+  // 5s state heartbeat, and (c) the OBS wake hooks below.
 
-  // OBS wake-up hooks: these fire reliably when the Browser Source becomes
-  // active again, even after long suspends. On wake we reconnect IMMEDIATELY
-  // (skip the backoff — OBS is now visible so the network is alive) to make
-  // the recovery near-instant instead of waiting out a long retry timer.
+  // OBS/page wake-up hooks: these fire reliably when the page becomes
+  // active again after throttling/suspend. If the link is stale at that
+  // point, reconnect immediately with backoff reset.
   const wake = () => {
     if (closed) return
-    if (!ws || ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
-      // If the socket looks alive, first give it a beat to deliver any
-      // buffered frames; if still stale, kill it for a fresh reconnect.
-      setTimeout(killIfStale, 800)
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      retry = 0
+      schedule()
       return
     }
-    // Socket is dead or closing: reconnect right now, backoff reset.
-    retry = 0
-    schedule()
+    // Socket looks open: give it a beat to deliver buffered frames, then
+    // drop it only if it is genuinely stale (missed several heartbeats).
+    setTimeout(killIfStale, 800)
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') wake()
@@ -110,7 +111,6 @@ export function connectWS(
   return {
     close() {
       closed = true
-      clearInterval(watchdog)
       try { ws?.close() } catch { /* noop */ }
     },
     send(m) {
