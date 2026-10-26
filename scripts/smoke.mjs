@@ -28,11 +28,15 @@ async function fetchJson(method, path, body, extraHeaders) {
 async function run() {
   console.log('\n🔍 Tiklive smoke test\n' + '─'.repeat(50))
 
-  // 1-4: Server up + static files
-  check('Server responds', (await fetchJson('GET', '/')).ok)
-  check('Index HTML has title', ((await fetchJson('GET', '/')).text || '').includes('Tiklive'))
-  check('JS assets load (index chunk)', (await fetchJson('GET', '/assets/index-BJTszt5Q.js')).ok)
-  check('CSS asset loads', (await fetchJson('GET', '/assets/index-BCzypsqb.css')).ok)
+  // 1-4: Server up + static files (asset names discovered from index.html,
+  // not hardcoded — Vite hashes chunk names on every build).
+  const index = await fetchJson('GET', '/')
+  check('Server responds', index.ok)
+  check('Index HTML has title', (index.text || '').includes('Tiklive'))
+  const indexJs = (index.text.match(/assets\/index-[\w-]+\.js/) || [])[0]
+  const cssAsset = (index.text.match(/assets\/index-[\w-]+\.css/) || [])[0]
+  check('JS assets load (index chunk)', !!(indexJs && (await fetchJson('GET', '/' + indexJs)).ok))
+  check('CSS asset loads', !!(cssAsset && (await fetchJson('GET', '/' + cssAsset)).ok))
 
   // 5-9: API endpoints
   check('GET /api/state 200', (await fetchJson('GET', '/api/state')).ok)
