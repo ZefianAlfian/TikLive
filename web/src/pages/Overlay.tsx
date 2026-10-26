@@ -91,9 +91,15 @@ export default function Overlay() {
 
   // Auto-scale: fit the fixed 1080x1920 canvas into whatever the OBS Browser
   // Source viewport is (any ratio), preserving proportions and centering.
-  // This avoids the "overlay too big / broken in OBS" problem.
   const DESIGN_W = 1080
   const DESIGN_H = 1920
+  const [scale, setScale] = useState(1)
+  useEffect(() => {
+    const calc = () => setScale(Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H))
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [])
   return (
     <div style={{
       position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden',
@@ -102,7 +108,7 @@ export default function Overlay() {
     }}>
       <div style={{
         position: 'relative', width: DESIGN_W, height: DESIGN_H,
-        transform: `scale(min(100vw / ${DESIGN_W}, 100vh / ${DESIGN_H}))`,
+        transform: `scale(${scale})`,
         transformOrigin: 'center center',
         flexShrink: 0,
       }}>
