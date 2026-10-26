@@ -89,6 +89,42 @@ func (h *Hub) AddClient(c *Client) {
 	h.clients[c] = true
 	h.mu.Unlock()
 	log.Printf("[hub] client connected (%s), total=%d", c.Role, len(h.clients))
+
+	// Immediately sync the new (or reconnecting) client with the current
+	// state. Without this, an overlay that reconnects after an OBS
+	// throttle/network blip would sit on stale data until the next event.
+	var st map[string]interface{}
+	var lb []engine.LeaderRow
+	h.Submit(func() {
+		st = h.stateSnapshotOnBus()
+		lb = h.eng.Leaderboard()
+	})
+	if st != nil {
+		h.sendTo(c, WSMessage{Type: "state", Data: st})
+	}
+	if lb != nil {
+		h.sendTo(c, WSMessage{Type: "leaderboard", Data: lb})
+	}
+}
+
+// sendTo delivers one message to a single client without ever blocking the
+// hub; a slow/full client is dropped instead.
+func (h *Hub) sendTo(c *Client, msg WSMessage) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	select {
+	case c.Send <- data:
+	default:
+		log.Printf("[hub] dropping slow client %s", c.Role)
+		h.mu.Lock()
+		if _, ok := h.clients[c]; ok {
+			delete(h.clients, c)
+			close(c.Send)
+		}
+		h.mu.Unlock()
+	}
 }
 
 func (h *Hub) RemoveClient(c *Client) {
@@ -175,12 +211,21 @@ func (h *Hub) Run(stop <-chan struct{}) {
 	defer h.StopProvider() // clean teardown when the bus consumer exits
 	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
+	stateTick := time.NewTicker(5 * time.Second)
+	defer stateTick.Stop()
 	for {
 		select {
 		case <-stop:
 			return
 		case <-tick.C:
 			h.eng.Tick()
+		case <-stateTick.C:
+			// Self-healing heartbeat: periodically rebroadcast the full
+			// state so any client that missed frames (OBS throttling,
+			// brief disconnect, dropped frames) resyncs automatically
+			// without requiring a manual refresh.
+			h.broadcast(WSMessage{Type: "state", Data: h.stateSnapshotOnBus()})
+			h.broadcast(WSMessage{Type: "leaderboard", Data: h.eng.Leaderboard()})
 		case ev, ok := <-h.bus:
 			if !ok {
 				return
@@ -203,10 +248,12 @@ func (h *Hub) Submit(fn func()) bool {
 		case <-done:
 			return true
 		case <-time.After(3 * time.Second):
-			return false // bus goroutine wedged; don't hang the HTTP handler
+			log.Printf("[hub] Submit TIMEOUT menunggu bus consumer (cmdCh busy)")
+			return false
 		}
 	default:
-		return false // command queue full
+		log.Printf("[hub] Submit DROP — cmdCh penuh (len=%d)", len(h.cmdCh))
+		return false
 	}
 }
 
@@ -241,7 +288,10 @@ func (h *Hub) handleEvent(ev provider.RawEvent) {
 	h.logEvent(msg)
 	h.broadcast(msg)
 	if ev.Kind == "viewers" || ev.Kind == "connect" || ev.Kind == "disconnect" {
-		h.broadcast(WSMessage{Type: "state", Data: h.StateSnapshot()})
+		// NOTE: we are ON the bus goroutine here — must NOT call
+		// StateSnapshot() (which Submits & waits → self-deadlock). Use the
+		// direct on-bus variant.
+		h.broadcast(WSMessage{Type: "state", Data: h.stateSnapshotOnBus()})
 	}
 }
 

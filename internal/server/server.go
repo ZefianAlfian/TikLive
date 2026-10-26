@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"tiklive/internal/config"
@@ -79,6 +80,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	go cl.WriteLoop()
 	s.hub.AddClient(cl)
 	defer s.hub.RemoveClient(cl)
+	// Detect dead connections (OBS suspend/resume, half-open TCP): require a
+	// pong every 60s or drop the client. Browsers answer protocol pings
+	// automatically, so healthy clients are never affected.
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
 			return
