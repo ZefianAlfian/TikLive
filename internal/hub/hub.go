@@ -51,6 +51,10 @@ type Hub struct {
 	events []WSMessage
 	maxLog int
 
+	// coalescing buffer for high-frequency provider events (viewers/join/
+	// like). Filled on the bus goroutine, flushed every 300ms by Run.
+	batch []WSMessage
+
 	// status snapshot
 	stateMu      sync.Mutex
 	viewers      int
@@ -213,6 +217,8 @@ func (h *Hub) Run(stop <-chan struct{}) {
 	defer tick.Stop()
 	stateTick := time.NewTicker(5 * time.Second)
 	defer stateTick.Stop()
+	flushTick := time.NewTicker(300 * time.Millisecond)
+	defer flushTick.Stop()
 	for {
 		select {
 		case <-stop:
@@ -226,6 +232,18 @@ func (h *Hub) Run(stop <-chan struct{}) {
 			// without requiring a manual refresh.
 			h.broadcast(WSMessage{Type: "state", Data: h.stateSnapshotOnBus()})
 			h.broadcast(WSMessage{Type: "leaderboard", Data: h.eng.Leaderboard()})
+		case <-flushTick.C:
+			// Coalesce high-frequency provider events (viewers/join/like
+			// flood huge streams): drain the batch once per 300ms instead
+			// of broadcasting each event the instant it arrives. Keeps the
+			// WebSocket traffic bounded for clients on slow links on busy
+			// LIVE rooms (this was the "overlay lag" symptom at @kohcun).
+			if len(h.batch) > 0 {
+				for _, m := range h.batch {
+					h.broadcast(m)
+				}
+				h.batch = h.batch[:0]
+			}
 		case ev, ok := <-h.bus:
 			if !ok {
 				return
@@ -286,13 +304,18 @@ func (h *Hub) handleEvent(ev provider.RawEvent) {
 	// Log and broadcast a client-facing event envelope.
 	msg := WSMessage{Type: "event", Data: ev}
 	h.logEvent(msg)
-	h.broadcast(msg)
+	// High-frequency, cosmetic events (viewers, joins, likes) are coalesced
+	// into h.batch and flushed every 300ms by Run — broadcasting each one
+	// instantly flooded every client's socket on a busy room like @kohcun.
+	switch ev.Kind {
+	case "viewers", "join", "like", "share", "follow":
+		h.batch = append(h.batch, msg)
+	default:
+		h.broadcast(msg)
+	}
 	// NOTE: we are ON the bus goroutine. Do NOT call StateSnapshot() here
-	// (it Submits and waits → self-deadlock). High-frequency events
-	// (viewers/join/like) do NOT trigger a full-state broadcast — the
-	// periodic 5s stateTick already resyncs every client; broadcasting the
-	// whole snapshot per viewer event used to flood slow clients (the
-	// "overlay feels stuck" symptom on busy LIVE streams).
+	// (it Submits and waits → self-deadlock). Full-state broadcasts happen
+	// once per 5s (stateTick) — enough for clients to stay in sync.
 	if ev.Kind == "connect" || ev.Kind == "disconnect" {
 		h.broadcast(WSMessage{Type: "state", Data: h.stateSnapshotOnBus()})
 	}

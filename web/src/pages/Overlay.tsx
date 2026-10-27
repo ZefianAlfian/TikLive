@@ -34,12 +34,28 @@ export default function Overlay() {
       }, 1400)
     }
 
+    // Apply a state snapshot (from WS or poll).
+    const applyState = (st: State) => {
+      setState(st)
+      if (st.scores) setLeader(st.scores)
+    }
+
+    // Poll fallback: if the WS link is down or OBS froze timers, fetch the
+    // authoritative snapshot every 3s so the overlay never stays frozen.
+    // Cheap (local JSON, no payload churn) and only runs while disconnected.
+    const poll = setInterval(async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const r = await fetch('/api/state')
+          if (r.ok) applyState(await r.json())
+        } catch { /* server unreachable; retry next tick */ }
+      }
+    }, 3000)
+
     const conn = connectWS('overlay', (m: WSMessage) => {
       switch (m.type) {
         case 'state': {
-          const st = m.data as State
-          setState(st)
-          setLeader(st.scores || [])
+          applyState(m.data as State)
           break
         }
         case 'leaderboard':
@@ -72,12 +88,9 @@ export default function Overlay() {
     }, setConnected)
 
     // Initial fetch: state snapshot for a fresh load.
-    fetch('/api/state').then((r) => r.json()).then((st) => {
-      setState(st)
-      setLeader(st.scores || [])
-    }).catch(() => {/* offline; WS will catch up */})
+    fetch('/api/state').then((r) => r.json()).then(applyState).catch(() => {/* offline; WS catch up */})
 
-    return () => conn.close()
+    return () => { conn.close(); clearInterval(poll) }
   }, [])
 
   const phase = state?.game || 'idle'
